@@ -38,8 +38,8 @@ class CustomCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/e
         # 이 정보는 `self.model.ep_info_buffer`에서 얻을 수 있습니다.
         # 에피소드 정보가 충분히 쌓였는지 확인합니다.
         if len(self.model.ep_info_buffer) > 0 and len(self.model.ep_info_buffer[0]) > 0:
-            mean_reward = np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer])
-            self.logger.record("mean_reward", mean_reward)
+            mean_return = np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer])
+            self.logger.record("mean_return", mean_return)
 
     
     def _on_step(self):
