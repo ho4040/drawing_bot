@@ -18,6 +18,7 @@
 * TENSORBOARD_DIR : 텐서보드 기록 경로 (기본값: ./temp/runs)
 * TORCH_HOME : vgg weight 다운로드 경루 (기본값: ./temp/cache)
 * CHECKPOINT_PATH : 체크포인트 저장경로 (기본값: ./temp/ckpt)
+* ALGORITHM : 알고리즘 (기본값: PPO). SAC 나 PPO 중 선택.
 
 ### 포트
 

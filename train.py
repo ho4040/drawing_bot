@@ -1,5 +1,5 @@
 import datetime
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.env_util import make_vec_env
 
@@ -80,6 +80,7 @@ if __name__ == "__main__":
     TENSORBOARD_DIR = os.getenv("TENSORBOARD_DIR", "./temp/runs") 
     CHECKPOINT_PATH = os.getenv("CHECKPOINT_PATH", "./temp/ckpt")
     TORCH_HOME = os.getenv("TORCH_HOME", "./temp/cache")
+    ALGORITHM = os.getenv("ALGORITHM", "PPO")  # 'PPO' 또는 'SAC'
 
     print("CHECK_FREQ", CHECK_FREQ)
     print("MAX_STEPS", MAX_STEPS)
@@ -88,6 +89,7 @@ if __name__ == "__main__":
     print("TENSORBOARD_DIR", TENSORBOARD_DIR)
     print("CHECKPOINT_PATH", CHECKPOINT_PATH)
     print("TORCH_HOME", TORCH_HOME)
+    print("ALGORITHM", ALGORITHM)
 
     os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
@@ -96,12 +98,19 @@ if __name__ == "__main__":
     print("env num", envs.num_envs)
 
     dt = datetime.datetime.now().strftime("%m_%d_%H_%M")
-    tb_log_name = f"ppo_drawing" + f"_{dt}"
+    tb_log_name = f"drawing_{dt}"
 
+    if ALGORITHM == "PPO":
+        model = PPO("CnnPolicy", envs, verbose=1, tensorboard_log=TENSORBOARD_DIR, device="auto")
+    elif ALGORITHM == "SAC":
+        model = SAC("CnnPolicy", envs, verbose=1, tensorboard_log=TENSORBOARD_DIR, device="auto", buffer_size=10000)
+    else:
+        raise ValueError(f"Unsupported algorithm: {ALGORITHM}")
+    
     image_callback = TrainCallback(check_freq=CHECK_FREQ, checkpoint_dir=CHECKPOINT_PATH)
     eval_callback = EvalCallback(eval_env, best_model_save_path=CHECKPOINT_PATH, log_path=TENSORBOARD_DIR, eval_freq=CHECK_FREQ)
     callback = CallbackList([eval_callback, image_callback])
-    model = PPO("CnnPolicy", envs, verbose=1, tensorboard_log=TENSORBOARD_DIR, device="auto")
+    
     model.learn(total_timesteps=TOTAL_TIMESTEPS,  callback=callback, tb_log_name=tb_log_name,  progress_bar=True)
     mean_reward, std_reward = evaluate_policy(model, envs, n_eval_episodes=10)
     model.save("drawing_ppo_model")
