@@ -91,7 +91,7 @@ class BezierDrawingCanvas:
         # self.surface.write_to_png(filename)
     
     def clear_surface(self):
-        self.ctx.set_source_rgba(1, 1, 1, 1)  # White color
+        self.ctx.set_source_rgba(random.random(), random.random(), random.random(), 1)  # White color
         self.ctx.paint()
     
     def draw_action(self, action):
@@ -199,8 +199,8 @@ class DrawingEnv(gym.Env):
     def step(self, action):
         if self.curstep >= self.episode_length_limit:
             return self.get_observation(), 0, True, False, {}
-        # add noise to action
-        action = action + np.random.normal(0, 0.05, size=action.shape)
+        
+        # action = action + np.random.normal(0, 0.05, size=action.shape) # add noise to action
         # convert range [-1, 1] to [0, 1]        
         action = (action + 1) / 2
         self.canvas.draw_action(action)
