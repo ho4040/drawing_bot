@@ -31,10 +31,22 @@
 python drawing_env.py
 ```
 
+
+선이 잘 그려지는지 확인
+```bash
+python test_drawing.py
+```
+
 그림이 잘 그려지는지 확인
 
 ```bash
 python test_env.py
+```
+
+리워드와 Loss 계산이 잘 되는지  확인
+
+```bash
+python test_loss.py
 ```
 
 학습 (CPU)
