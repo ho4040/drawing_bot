@@ -50,6 +50,12 @@ python test_loss.py
 ```
 
 학습 (CPU)
+
+```bash
+tensorboard --logdir=./temp/runs --port 6007
+```
+텐서보드를 먼저 켜야함.
+
 ```bash
 python train.py
 ```
