@@ -93,7 +93,7 @@ if __name__ == "__main__":
 
     os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
-    envs = make_vec_env(DrawingEnv, n_envs=N_ENV, seed=0, env_kwargs=dict(max_steps=MAX_STEPS, perceptual_weight=0.75, l2_weight=0.25))
+    envs = make_vec_env(DrawingEnv, n_envs=N_ENV, seed=0, env_kwargs=dict(max_steps=MAX_STEPS, perceptual_weight=0.5, l2_weight=0.5))
     eval_env = Monitor(DrawingEnv(max_steps=MAX_STEPS))
     print("env num", envs.num_envs)
 
