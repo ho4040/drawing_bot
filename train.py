@@ -6,6 +6,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from drawing_env import DrawingEnv
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback, CallbackList
 from stable_baselines3.common.logger import TensorBoardOutputFormat
+from stable_baselines3.common.monitor import Monitor
 
 import os
 import numpy as np
@@ -91,7 +92,7 @@ if __name__ == "__main__":
     os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
     envs = make_vec_env(DrawingEnv, n_envs=N_ENV, seed=0, env_kwargs=dict(max_steps=MAX_STEPS, perceptual_weight=0.75, l2_weight=0.25))
-    eval_env = DrawingEnv(max_steps=MAX_STEPS)
+    eval_env = Monitor(DrawingEnv(max_steps=MAX_STEPS))
     print("env num", envs.num_envs)
 
     dt = datetime.datetime.now().strftime("%m_%d_%H_%M")
