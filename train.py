@@ -136,9 +136,9 @@ if __name__ == "__main__":
     tb_log_name = f"drawing_{dt}"
 
     if ALGORITHM == "PPO":
-        model = PPO("CnnPolicy", envs, verbose=1, tensorboard_log=TENSORBOARD_DIR, device="auto")
+        model = PPO("CnnPolicy", envs, verbose=0, tensorboard_log=TENSORBOARD_DIR, device="auto")
     elif ALGORITHM == "SAC":
-        model = SAC("CnnPolicy", envs, verbose=1, tensorboard_log=TENSORBOARD_DIR, device="auto", buffer_size=SAC_BUFFER_SIZE)
+        model = SAC("CnnPolicy", envs, verbose=0, tensorboard_log=TENSORBOARD_DIR, device="auto", buffer_size=SAC_BUFFER_SIZE)
     else:
         raise ValueError(f"Unsupported algorithm: {ALGORITHM}")
     
