@@ -1,7 +1,7 @@
 
 ### drawing_env.py
 
-* BezierDrawing : 획을 그려주는 기능을 구현
+* BezierDrawingCanvas : 획을 그려주는 기능을 구현
 * DrawingEnv : gymnasium 인터페이스로 Environment 구현
 
 ### train.py

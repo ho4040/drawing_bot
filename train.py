@@ -13,15 +13,16 @@ import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
 
-class TrainCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/en/master/guide/tensorboard.html
+class CustomCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/en/master/guide/tensorboard.html
     """
     각 에피소드가 끝날 때마다 TensorBoard에 이미지를 로깅하는 콜백
     """
-    def __init__(self, check_freq, checkpoint_dir):
-        super(TrainCallback, self).__init__(verbose=1)
+    def __init__(self, check_freq, difficulty_inc_period, checkpoint_dir):
+        super(CustomCallback, self).__init__(verbose=1)
         self.check_freq = check_freq
         self.best_mean_reward = -float('inf')
         self.checkpoint_dir = checkpoint_dir
+        self.difficulty_inc_period = difficulty_inc_period
 
     def _on_training_start(self):
         self._log_freq = 1000  # log every 1000 calls
@@ -39,11 +40,6 @@ class TrainCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/en
         if len(self.model.ep_info_buffer) > 0 and len(self.model.ep_info_buffer[0]) > 0:
             mean_reward = np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer])
             self.logger.record("mean_reward", mean_reward)
-            # if mean_reward > self.best_mean_reward:
-            #     print("Save best model", mean_reward)
-            #     self.best_mean_reward = mean_reward
-            #     checkpoint_path = os.path.join(self.checkpoint_dir, f'model_{self.num_timesteps}_steps.zip')
-            #     model.save(checkpoint_path)
 
     
     def _on_step(self):
@@ -53,8 +49,10 @@ class TrainCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/en
             # # numpy 이미지를 [C, H, W] 포맷의 텐서로 변환합니다.
             image_tensor = np.transpose(image_array, (2, 0, 1))
             # # 이미지를 TensorBoard에 로깅합니다.
-            self.tb_formatter.writer.add_image('training/image', image_tensor / 255, self.num_timesteps)
+            self.tb_formatter.writer.add_image('sample/image', image_tensor / 255, self.num_timesteps)
             self.tb_formatter.writer.flush()
+        if self.num_timesteps % self.difficulty_inc_period == 0:
+            DrawingEnv.inc_difficulty()
         return True
     
     def _on_training_end(self):
@@ -73,7 +71,7 @@ if __name__ == "__main__":
 
     print("Start training")
 
-    CHECK_FREQ = int(os.getenv("CHECK_FREQ", 100))
+    CHECK_FREQ = int(os.getenv("CHECK_FREQ", 10))
     MAX_STEPS= int(os.getenv("MAX_STEPS", 50))
     N_ENV = int(os.getenv("N_ENV", 4))
     TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", 20000) )
@@ -81,8 +79,11 @@ if __name__ == "__main__":
     CHECKPOINT_PATH = os.getenv("CHECKPOINT_PATH", "./temp/ckpt")
     TORCH_HOME = os.getenv("TORCH_HOME", "./temp/cache")
     ALGORITHM = os.getenv("ALGORITHM", "PPO")  # 'PPO' 또는 'SAC'
+    SAC_BUFFER_SIZE = int(os.getenv("SAC_BUFFER_SIZE", 10000))  # 'PPO' 또는 'SAC'
+    DIFFICULTY_INC_PERIOD = int(os.getenv("DIFFICULTY_INC_PERIOD", 10000))
 
     print("CHECK_FREQ", CHECK_FREQ)
+    print("DIFFICULTY_INC_PERIOD", DIFFICULTY_INC_PERIOD)
     print("MAX_STEPS", MAX_STEPS)
     print("N_ENV", N_ENV)
     print("TOTAL_TIMESTEPS", TOTAL_TIMESTEPS)
@@ -90,6 +91,7 @@ if __name__ == "__main__":
     print("CHECKPOINT_PATH", CHECKPOINT_PATH)
     print("TORCH_HOME", TORCH_HOME)
     print("ALGORITHM", ALGORITHM)
+    print("SAC_BUFFER_SIZE", SAC_BUFFER_SIZE)
 
     os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
@@ -103,13 +105,13 @@ if __name__ == "__main__":
     if ALGORITHM == "PPO":
         model = PPO("CnnPolicy", envs, verbose=1, tensorboard_log=TENSORBOARD_DIR, device="auto")
     elif ALGORITHM == "SAC":
-        model = SAC("CnnPolicy", envs, verbose=1, tensorboard_log=TENSORBOARD_DIR, device="auto", buffer_size=10000)
+        model = SAC("CnnPolicy", envs, verbose=1, tensorboard_log=TENSORBOARD_DIR, device="auto", buffer_size=SAC_BUFFER_SIZE)
     else:
         raise ValueError(f"Unsupported algorithm: {ALGORITHM}")
     
-    image_callback = TrainCallback(check_freq=CHECK_FREQ, checkpoint_dir=CHECKPOINT_PATH)
+    custom_callback = CustomCallback(check_freq=CHECK_FREQ, difficulty_inc_period=DIFFICULTY_INC_PERIOD, checkpoint_dir=CHECKPOINT_PATH)
     eval_callback = EvalCallback(eval_env, best_model_save_path=CHECKPOINT_PATH, log_path=TENSORBOARD_DIR, eval_freq=CHECK_FREQ)
-    callback = CallbackList([eval_callback, image_callback])
+    callback = CallbackList([eval_callback, custom_callback])
     
     model.learn(total_timesteps=TOTAL_TIMESTEPS,  callback=callback, tb_log_name=tb_log_name,  progress_bar=True)
     mean_reward, std_reward = evaluate_policy(model, envs, n_eval_episodes=10)

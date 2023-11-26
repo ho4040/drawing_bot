@@ -16,18 +16,16 @@ def random_color():
     a = random.random() # Fully opaque
     return r, g, b, a
 
-class BezierDrawing:
+class BezierDrawingCanvas:
     VGG_SIZE = 224
     MAX_BRUSH_WIDTH = 80
     def __init__(self):
-        self.width = BezierDrawing.VGG_SIZE
-        self.height = BezierDrawing.VGG_SIZE
+        self.width = BezierDrawingCanvas.VGG_SIZE
+        self.height = BezierDrawingCanvas.VGG_SIZE
         self.surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.width, self.height )
         self.ctx = cairo.Context(self.surface)
         self.ctx.set_source_rgba(1, 1, 1, 1)
         self.ctx.paint()
-
-    
     def fill_image(self, pilImage):
         # Convert the PIL image to RGBA format
         if pilImage.mode != 'RGBA':
@@ -53,7 +51,6 @@ class BezierDrawing:
         # Draw the new image
         self.ctx.set_source_surface(cairoImageSurface, 0, 0)
         self.ctx.paint()
-
     def bezier_interpolation(self, p0, p1, p2, p3, num_points=100):
         points = []
         for t in np.linspace(0, 1, num_points):
@@ -64,7 +61,6 @@ class BezierDrawing:
             point = (a * np.array(p0) + b * np.array(p1) + c * np.array(p2) + d * np.array(p3))
             points.append(point)
         return points
-
     def draw_variable_width_curve(self, points, start_width, end_width, r, g, b, a):
         self.ctx.set_line_cap(cairo.LINE_CAP_ROUND)
 
@@ -79,16 +75,13 @@ class BezierDrawing:
             self.ctx.move_to(*points[i - 1])
             self.ctx.line_to(*points[i])
             self.ctx.stroke()
-    
     def get_image_as_numpy_array(self):
         buf = self.surface.get_data()
         image = np.ndarray(shape=(self.height, self.width, 4), dtype=np.uint8, buffer=buf)
         image = image[:, :, :3]  # Alpha 채널 제거
         observation = np.transpose(image, (2, 0, 1))  # 축 변경: HWC to CHW
         return observation
-
     def save_to_file(self, filename):
-        
         # change ABGR to ARGB
         buf = self.surface.get_data()
         image = np.ndarray(shape=(self.height, self.width, 4), dtype=np.uint8, buffer=buf)
@@ -106,7 +99,7 @@ class BezierDrawing:
         # action value range is [0, 1]
         uv_coords = action[:8].reshape((4, 2))
         control_points = uv_coords * np.array([self.width, self.height])
-        start_width, end_width = action[8:10] * BezierDrawing.MAX_BRUSH_WIDTH  # 픽셀로 너비를 변환합니다. 
+        start_width, end_width = action[8:10] * BezierDrawingCanvas.MAX_BRUSH_WIDTH  # 픽셀로 너비를 변환합니다. 
         r, g, b, a = action[10:14]  # 색상은 그대로 사용합니다.
         num_points = int(action[14] * 100) + 10  # 10에서 110 사이의 점을 생성합니다.
         points = self.bezier_interpolation(*control_points, num_points=num_points)
@@ -132,63 +125,95 @@ class BezierDrawing:
 
 class DrawingEnv(gym.Env):
     metadata = {'render.modes': ['human', 'rgb_array']}
+    DIFFICULTY = 1
+    @classmethod
+    def inc_difficulty(cls):
+        cls.DIFFICULTY = cls.DIFFICULTY+1
+        print("Difficulty increased to", cls.DIFFICULTY)
 
     def __init__(self, perceptual_weight=1.0, l2_weight=0.0, max_steps=100):
         super(DrawingEnv, self).__init__()
-        target_image_path = 'target.png'
-        self.drawing = BezierDrawing() # vgg size
+        self.canvas = BezierDrawingCanvas() # vgg size
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(15,), dtype=np.float32)
-        self.observation_space = spaces.Box(low=0, high=255, shape=(3, BezierDrawing.VGG_SIZE*2, BezierDrawing.VGG_SIZE), dtype=np.uint8)
+        self.observation_space = spaces.Box(low=0, high=255, shape=(3, BezierDrawingCanvas.VGG_SIZE, BezierDrawingCanvas.VGG_SIZE*2), dtype=np.uint8)
         self.perceptual_weight = perceptual_weight
         self.l2_weight = l2_weight
         self.curstep = 0
-        self.max_steps = max_steps + random.randint(0, 10)       
+        self.episode_length = min(max_steps, DrawingEnv.DIFFICULTY + random.randint(0, 10))
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.vgg = vgg19(weights=VGG19_Weights.IMAGENET1K_V1).features.eval().to(self.device)
         for param in self.vgg.parameters():
             param.requires_grad = False
         
-        # 미리 계산해둡니다.
-        with torch.no_grad():
-            self.target_image = Image.open(target_image_path).convert('RGB').resize((BezierDrawing.VGG_SIZE, BezierDrawing.VGG_SIZE))
-            self.target_array = np.array(self.target_image, dtype=np.uint8)
-            self.target_tensor = torch.tensor(self.target_array).permute(2, 0, 1).unsqueeze(0).to(self.device)
-            self.target_tensor_normalized = self.normalize_tensor(self.target_tensor.float().div(255))
-            self.target_features = self.vgg(self.target_tensor_normalized)
-        
+        self.set_random_target()
         self.last_loss = self.get_current_loss()
+    def set_random_target(self):
+        with torch.no_grad():
+            self.target = BezierDrawingCanvas() # vgg size
+            self.target.draw_random_strokes(DrawingEnv.DIFFICULTY)
+            self.update_target_cache()  # 미리 계산해둡니다.
     
+    def update_target_cache(self):
+        np_array, tensor, tensor_normalized, vgg_features = self.get_feature(self.target)
+        self.target_array = np_array
+        self.target_tensor = tensor
+        self.target_tensor_normalized = tensor_normalized
+        self.target_features = vgg_features
+
+    def get_feature(self, canvas:BezierDrawingCanvas):
+        with torch.no_grad():
+            np_array =  canvas.get_image_as_numpy_array()
+            tensor = torch.tensor(np_array).unsqueeze(0).to(self.device)
+            tensor_normalized = self.normalize_tensor(tensor.float().div(255))
+            vgg_features = self.vgg(tensor_normalized)
+        return np_array, tensor, tensor_normalized, vgg_features
+
+    def apply_target_from_canvas(self):
+        self.canvas.fill_image(self.target_image)
+        self.last_loss = self.get_current_loss()
+
     def get_observation(self):
-        current_obs = self.drawing.get_image_as_numpy_array()  # Already CHW format
+        current_obs = self.canvas.get_image_as_numpy_array()  # Already CHW format
         target_obs = self.target_tensor.squeeze(0).cpu().numpy()  # PyTorch Tensor to NumPy array, CHW format
-        observation = np.concatenate([current_obs, target_obs], axis=1)  # Concatenate along the channel dimension
+        observation = np.concatenate([target_obs, current_obs], axis=2)  # Concatenate along the channel dimension
         return observation
     
     def get_current_loss(self):
-        current_array = self.drawing.get_image_as_numpy_array()
-        current_tensor = torch.from_numpy(current_array).squeeze(0).float().to(self.device)
-        return self.calculate_loss(current_tensor)
+        with torch.no_grad():
+            _, _, tensor_normalized, vgg_features = self.get_feature(self.canvas)
+            current_tensor_normalized  = tensor_normalized
+            current_features = vgg_features
+            # Loss 계산
+            perceptual_loss = torch.nn.functional.mse_loss(current_features, self.target_features).item()            
+            l2_loss = torch.nn.functional.mse_loss(current_tensor_normalized, self.target_tensor_normalized).item()
+            loss = self.perceptual_weight * perceptual_loss  + self.l2_weight * l2_loss
+            return loss
     
     def step(self, action):
-        if self.curstep < self.max_steps:
-            # convert range [-1, 1] to [0, 1]
-            action = (action + 1) / 2
-            self.drawing.draw_action(action)
-            new_loss = self.get_current_loss()
-            reward = self.last_loss - new_loss
-            self.last_loss = new_loss
-            self.curstep += 1
-            return self.get_observation(), reward, False, False, {} # observation, reward, terminated, truncated, info 
-        return self.get_observation(), 0, True, False, {}
+        if self.curstep >= self.episode_length:
+            return self.get_observation(), 0, True, False, {}
+        # convert range [-1, 1] to [0, 1]
+        action = (action + 1) / 2
+        self.canvas.draw_action(action)
+        new_loss = self.get_current_loss()
+        reward = self.last_loss - new_loss
+        self.last_loss = new_loss
+        self.curstep += 1
+        return self.get_observation(), reward, False, False, {} # observation, reward, terminated, truncated, info 
+        
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
-        self.drawing.clear_surface()
-        self.curstep = 0
+        
+        self.set_random_target()
+        self.canvas.clear_surface()
+        self.curstep = 0        
+        self.last_loss = self.get_current_loss()
+
         return self.get_observation(), {}
 
     def render(self, mode='human'):
-        image_array = self.drawing.get_image_as_numpy_array()
+        image_array = self.get_observation()
         image_array = image_array.transpose(1, 2, 0) 
         if mode == 'rgb_array':
             return image_array
@@ -197,10 +222,11 @@ class DrawingEnv(gym.Env):
             img.show()
 
     def save_canvas_to_file(self, filename):
-        self.drawing.save_to_file(filename)
+        self.canvas.save_to_file(filename)
 
     def save_target_to_file(self, filename):
-        self.target_image.save(filename)
+        self.target.save_to_file(filename)
+        
 
     def save_observation_to_file(self, filename):
         image_array = self.get_observation()
@@ -218,22 +244,7 @@ class DrawingEnv(gym.Env):
         std = torch.tensor(VGG_STD).view(1, -1, 1, 1).to(self.device)
         return (tensor - mean) / std
 
-    def calculate_loss(self, image_tensor):
-        assert isinstance(image_tensor, torch.Tensor), "Input must be a torch.Tensor"
-        # VGG 네트워크를 통해 특성 추출
-        with torch.no_grad():
-            current_tensor = image_tensor.float().unsqueeze(0).float().div(255).to(self.device)
-            # 평균과 표준편차를 사용하여 정규화
-            current_tensor_normalized  = self.normalize_tensor(current_tensor)
-            current_features = self.vgg(current_tensor_normalized)
-            perceptual_loss = torch.nn.functional.mse_loss(current_features, self.target_features).item()
-
-            # L2 손실 계산
-            l2_loss = torch.nn.functional.mse_loss(current_tensor_normalized, self.target_tensor_normalized).item()
-            reward = self.perceptual_weight * perceptual_loss  + self.l2_weight * l2_loss
-        
-        return reward
-
+   
 if __name__ == "__main__":
     from stable_baselines3.common.env_checker import check_env
     env = DrawingEnv(perceptual_weight=1.0, 
