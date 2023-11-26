@@ -103,11 +103,13 @@ class BezierDrawing:
     
     def draw_action(self, action):
         # 여기에서는 제공된 UV 좌표를 실제 픽셀 좌표로 스케일링합니다.
+        # action value range is [0, 1]
         uv_coords = action[:8].reshape((4, 2))
         control_points = uv_coords * np.array([self.width, self.height])
         start_width, end_width = action[8:10] * BezierDrawing.MAX_BRUSH_WIDTH  # 픽셀로 너비를 변환합니다. 
         r, g, b, a = action[10:14]  # 색상은 그대로 사용합니다.
-        points = self.bezier_interpolation(*control_points)
+        num_points = int(action[14] * 100) + 10  # 10에서 110 사이의 점을 생성합니다.
+        points = self.bezier_interpolation(*control_points, num_points=num_points)
         self.draw_variable_width_curve(points, start_width, end_width, r, g, b, a)
 
     def draw_random_strokes(self, num_strokes=1):
@@ -117,8 +119,9 @@ class BezierDrawing:
             p1 = (random.uniform(0, self.width), random.uniform(0, self.height))
             p2 = (random.uniform(0, self.width), random.uniform(0, self.height))
             p3 = (random.uniform(0, self.width), random.uniform(0, self.height))
+            num_points = random.randint(10, 100)
             # 베지어 곡선 점 계산
-            points = self.bezier_interpolation(p0, p1, p2, p3)
+            points = self.bezier_interpolation(p0, p1, p2, p3, num_points)
             # 랜덤 너비 설정
             start_width = random.uniform(1, 100)
             end_width = random.uniform(1, 100)
@@ -134,7 +137,7 @@ class DrawingEnv(gym.Env):
         super(DrawingEnv, self).__init__()
         target_image_path = 'target.png'
         self.drawing = BezierDrawing() # vgg size
-        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(14,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(15,), dtype=np.float32)
         self.observation_space = spaces.Box(low=0, high=255, shape=(3, BezierDrawing.VGG_SIZE*2, BezierDrawing.VGG_SIZE), dtype=np.uint8)
         self.perceptual_weight = perceptual_weight
         self.l2_weight = l2_weight

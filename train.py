@@ -95,7 +95,7 @@ if __name__ == "__main__":
     print("env num", envs.num_envs)
 
     dt = datetime.datetime.now().strftime("%m_%d_%H_%M")
-    tb_log_name = f"ppo_drawing" + f"_{dt}".format(0)
+    tb_log_name = f"ppo_drawing" + f"_{dt}"
 
     image_callback = TrainCallback(check_freq=CHECK_FREQ, checkpoint_dir=CHECKPOINT_PATH)
     eval_callback = EvalCallback(eval_env, best_model_save_path=CHECKPOINT_PATH, log_path=TENSORBOARD_DIR, eval_freq=500)

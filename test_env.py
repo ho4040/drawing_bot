@@ -1,4 +1,6 @@
 from drawing_env import DrawingEnv
+import os
+os.makedirs("./temp/test_env", exist_ok=True)
 
 env = DrawingEnv(perceptual_weight=1.0, l2_weight=0.0, max_steps=100)
 observation = env.reset()
@@ -17,4 +19,4 @@ while not done:
 env.render()  # Optionally render the environment
 
 print(f"Total reward: {total_reward}")
-env.save_to_file("final_drawing.png")
+env.save_observation_to_file("./temp/test_env/output.png")
