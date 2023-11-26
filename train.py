@@ -63,7 +63,23 @@ class CustomCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/e
             # 각 차원별로 히스토그램을 로깅합니다.
             for dim, actions in enumerate(self.actions_dim):
                 if actions:
-                    self.tb_formatter.writer.add_histogram(f'actions/histogram_dim_{dim}', np.array(actions), self.num_timesteps)
+                    if dim < 8: # cooorid
+                        # self.tb_formatter.writer.add_histogram(f'actions/histogram_coord_{dim}', np.array(actions), self.num_timesteps)
+                        pass
+                    elif dim == 8:
+                        self.tb_formatter.writer.add_histogram(f'actions/thickness_s', np.array(actions), self.num_timesteps)
+                    elif dim == 9:
+                        self.tb_formatter.writer.add_histogram(f'actions/thickness_e', np.array(actions), self.num_timesteps)
+                    elif dim == 10:
+                        self.tb_formatter.writer.add_histogram(f'actions/r', np.array(actions), self.num_timesteps)
+                    elif dim == 11:
+                        self.tb_formatter.writer.add_histogram(f'actions/g', np.array(actions), self.num_timesteps)
+                    elif dim == 12:
+                        self.tb_formatter.writer.add_histogram(f'actions/b', np.array(actions), self.num_timesteps)
+                    elif dim == 13:
+                        self.tb_formatter.writer.add_histogram(f'actions/a', np.array(actions), self.num_timesteps)
+                    elif dim == 14:
+                        self.tb_formatter.writer.add_histogram(f'actions/stroke_length', np.array(actions), self.num_timesteps)
                     self.actions_dim[dim].clear()
 
         if self.num_timesteps % self.difficulty_inc_period == 0:
