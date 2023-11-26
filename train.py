@@ -98,7 +98,7 @@ if __name__ == "__main__":
     tb_log_name = f"ppo_drawing" + f"_{dt}"
 
     image_callback = TrainCallback(check_freq=CHECK_FREQ, checkpoint_dir=CHECKPOINT_PATH)
-    eval_callback = EvalCallback(eval_env, best_model_save_path=CHECKPOINT_PATH, log_path=TENSORBOARD_DIR, eval_freq=500)
+    eval_callback = EvalCallback(eval_env, best_model_save_path=CHECKPOINT_PATH, log_path=TENSORBOARD_DIR, eval_freq=CHECK_FREQ)
     callback = CallbackList([eval_callback, image_callback])
     model = PPO("CnnPolicy", envs, verbose=1, tensorboard_log=TENSORBOARD_DIR, device="auto")
     model.learn(total_timesteps=TOTAL_TIMESTEPS,  callback=callback, tb_log_name=tb_log_name,  progress_bar=True)
