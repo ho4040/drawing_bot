@@ -31,16 +31,7 @@ class CustomCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/e
         # Save reference to tensorboard formatter object
         # note: the failure case (not formatter found) is not handled here, should be done with try/except.
         self.tb_formatter = next(formatter for formatter in output_formats if isinstance(formatter, TensorBoardOutputFormat))
-
     
-    def _on_rollout_end(self):
-        # rollout이 끝날 때 평균 리워드를 가져와서 TensorBoard에 기록합니다.
-        # 이 정보는 `self.model.ep_info_buffer`에서 얻을 수 있습니다.
-        # 에피소드 정보가 충분히 쌓였는지 확인합니다.
-        if len(self.model.ep_info_buffer) > 0 and len(self.model.ep_info_buffer[0]) > 0:
-            mean_return = np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer])
-            self.logger.record("mean_return", mean_return)
-
     
     def _on_step(self):
         if self.num_timesteps % self.check_freq == 0:
