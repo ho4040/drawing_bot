@@ -105,7 +105,7 @@ class BezierDrawingCanvas:
         end_width = max(end_width, 2/BezierDrawingCanvas.MAX_BRUSH_WIDTH) * BezierDrawingCanvas.MAX_BRUSH_WIDTH  # 픽셀로 너비를 변환합니다. 
 
         r, g, b, a = action[10:14]  # 색상은 그대로 사용합니다.
-        a = max(a, 0.1) # alpha 값이 너무 작으면 안보이므로 최소값을 0.1로 설정합니다.
+        a = max(a, 0.5) # alpha 값이 너무 작으면 안보이므로 최소값을 0.1로 설정합니다.
         
         num_points = int(action[14] * 100) + 10  # 10에서 110 사이의 점을 생성합니다.
         points = self.bezier_interpolation(*control_points, num_points=num_points)
@@ -157,6 +157,7 @@ class DrawingEnv(gym.Env):
     def set_random_target(self):
         with torch.no_grad():
             self.target = BezierDrawingCanvas() # vgg size
+            self.target.clear_surface()
             self.target.draw_random_strokes(DrawingEnv.DIFFICULTY)
             self.update_target_cache()  # 미리 계산해둡니다.
     
