@@ -99,9 +99,11 @@ class BezierDrawingCanvas:
         # action value range is [0, 1]
         uv_coords = action[:8].reshape((4, 2))
         control_points = uv_coords * np.array([self.width, self.height])
-        start_width, end_width = action[8:10] * BezierDrawingCanvas.MAX_BRUSH_WIDTH  # 픽셀로 너비를 변환합니다. 
+        start_width, end_width = action[8:10] 
         r, g, b, a = action[10:14]  # 색상은 그대로 사용합니다.
         a = max(a, 0.1) # alpha 값이 너무 작으면 안보이므로 최소값을 0.1로 설정합니다.
+        start_width = max(start_width, 2/BezierDrawingCanvas.MAX_BRUSH_WIDTH) * BezierDrawingCanvas.MAX_BRUSH_WIDTH  # 픽셀로 너비를 변환합니다. 
+        end_width = max(end_width, 2/BezierDrawingCanvas.MAX_BRUSH_WIDTH) * BezierDrawingCanvas.MAX_BRUSH_WIDTH  # 픽셀로 너비를 변환합니다. 
         num_points = int(action[14] * 100) + 10  # 10에서 110 사이의 점을 생성합니다.
         points = self.bezier_interpolation(*control_points, num_points=num_points)
         self.draw_variable_width_curve(points, start_width, end_width, r, g, b, a)
