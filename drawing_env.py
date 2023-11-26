@@ -145,7 +145,8 @@ class DrawingEnv(gym.Env):
         self.perceptual_weight = perceptual_weight
         self.l2_weight = l2_weight
         self.curstep = 0
-        self.episode_length = min(max_steps, DrawingEnv.DIFFICULTY + random.randint(0, 10))
+        self.max_steps = max_steps
+        self.episode_length_limit = min(max_steps, DrawingEnv.DIFFICULTY*2 + random.randint(0, 10))
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.vgg = vgg19(weights=VGG19_Weights.IMAGENET1K_V1).features.eval().to(self.device)
         for param in self.vgg.parameters():
@@ -196,7 +197,7 @@ class DrawingEnv(gym.Env):
             return loss
     
     def step(self, action):
-        if self.curstep >= self.episode_length:
+        if self.curstep >= self.episode_length_limit:
             return self.get_observation(), 0, True, False, {}
         # add noise to action
         action = action + np.random.normal(0, 0.05, size=action.shape)
@@ -216,7 +217,8 @@ class DrawingEnv(gym.Env):
         
         self.set_random_target()
         self.canvas.clear_surface()
-        self.curstep = 0        
+        self.curstep = 0
+        self.episode_length_limit = min(self.max_steps, DrawingEnv.DIFFICULTY*2 + random.randint(0, 10))
         self.last_loss = self.get_current_loss()
 
         return self.get_observation(), {}
