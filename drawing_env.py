@@ -196,8 +196,9 @@ class DrawingEnv(gym.Env):
         action = (action + 1) / 2
         self.canvas.draw_action(action)
         new_loss = self.get_current_loss()
-        reward = self.last_loss - new_loss
-        self.last_loss = new_loss
+        reward = -new_loss
+        # reward = self.last_loss - new_loss
+        # self.last_loss = new_loss
         self.curstep += 1
         return self.get_observation(), reward, False, False, {} # observation, reward, terminated, truncated, info 
         
