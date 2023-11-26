@@ -192,7 +192,9 @@ class DrawingEnv(gym.Env):
     def step(self, action):
         if self.curstep >= self.episode_length:
             return self.get_observation(), 0, True, False, {}
-        # convert range [-1, 1] to [0, 1]
+        # add noise to action
+        action = action + np.random.normal(0, 0.05, size=action.shape)
+        # convert range [-1, 1] to [0, 1]        
         action = (action + 1) / 2
         self.canvas.draw_action(action)
         new_loss = self.get_current_loss()
