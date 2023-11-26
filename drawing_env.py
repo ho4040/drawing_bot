@@ -139,7 +139,7 @@ class DrawingEnv(gym.Env):
         self.perceptual_weight = perceptual_weight
         self.l2_weight = l2_weight
         self.curstep = 0
-        self.max_steps = max_steps        
+        self.max_steps = max_steps + random.randint(0, 10)       
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.vgg = vgg19(weights=VGG19_Weights.IMAGENET1K_V1).features.eval().to(self.device)
         for param in self.vgg.parameters():
