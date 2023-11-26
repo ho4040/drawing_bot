@@ -1,0 +1,8 @@
+gymnasium
+torchvision
+torch
+stable-baselines3[extra]
+pycairo
+python-dotenv
+tensorboard
+requests
