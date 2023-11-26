@@ -11,7 +11,11 @@ from stable_baselines3.common.monitor import Monitor
 import os
 import numpy as np
 from dotenv import load_dotenv
+import gymnasium as gym
+
+
 load_dotenv()
+
 
 class CustomCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/en/master/guide/tensorboard.html
     """
@@ -23,6 +27,8 @@ class CustomCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/e
         self.best_mean_reward = -float('inf')
         self.checkpoint_dir = checkpoint_dir
         self.difficulty_inc_period = difficulty_inc_period
+        self.actions = []
+        
 
     def _on_training_start(self):
         self._log_freq = 1000  # log every 1000 calls
@@ -34,16 +40,35 @@ class CustomCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/e
     
     
     def _on_step(self):
+        # 모든 스텝에서 액션을 계산합니다.
+        current_action = self.model.env.actions.mean(axis=0)
+
+        # 첫 번째 스텝에서 actions_dim을 초기화합니다.
+        if not hasattr(self, 'actions_dim'):
+            self.actions_dim = [[] for _ in range(current_action.shape[0])]
+
+        # 각 차원별로 액션 값을 추가합니다.
+        for dim in range(current_action.shape[0]):
+            self.actions_dim[dim].append(current_action[dim])
+
         if self.num_timesteps % self.check_freq == 0:
             # 환경의 'render' 메서드를 사용하여 현재 이미지를 가져옵니다.
             image_array = self.model.env.envs[0].env.render(mode="rgb_array")
-            # # numpy 이미지를 [C, H, W] 포맷의 텐서로 변환합니다.
+            # numpy 이미지를 [C, H, W] 포맷의 텐서로 변환합니다.
             image_tensor = np.transpose(image_array, (2, 0, 1))
-            # # 이미지를 TensorBoard에 로깅합니다.
+            # 이미지를 TensorBoard에 로깅합니다.
             self.tb_formatter.writer.add_image('sample/image', image_tensor / 255, self.num_timesteps)
             self.tb_formatter.writer.flush()
+            
+            # 각 차원별로 히스토그램을 로깅합니다.
+            for dim, actions in enumerate(self.actions_dim):
+                if actions:
+                    self.tb_formatter.writer.add_histogram(f'actions/histogram_dim_{dim}', np.array(actions), self.num_timesteps)
+                    self.actions_dim[dim].clear()
+
         if self.num_timesteps % self.difficulty_inc_period == 0:
             DrawingEnv.inc_difficulty()
+
         return True
     
     def _on_training_end(self):
@@ -52,17 +77,17 @@ class CustomCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/e
 
 if __name__ == "__main__":
     # Check tensorboard is working with GET http://localhost:6007/
-    import requests
-    try:
-        r = requests.get("http://localhost:6007/")
-        print("Tensorboard is running")
-    except:
-        print("Tensorboard is not running")
-        exit(1)
+    # import requests
+    # try:
+    #     r = requests.get("http://localhost:6007/")
+    #     print("Tensorboard is running")
+    # except:
+    #     print("Tensorboard is not running")
+    #     exit(1)
 
     print("Start training")
 
-    CHECK_FREQ = int(os.getenv("CHECK_FREQ", 10))
+    CHECK_FREQ = int(os.getenv("CHECK_FREQ", 100))
     MAX_STEPS= int(os.getenv("MAX_STEPS", 50))
     N_ENV = int(os.getenv("N_ENV", 4))
     TOTAL_TIMESTEPS = int(os.getenv("TOTAL_TIMESTEPS", 20000) )
@@ -86,7 +111,8 @@ if __name__ == "__main__":
 
     os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
-    envs = make_vec_env(DrawingEnv, n_envs=N_ENV, seed=0, env_kwargs=dict(max_steps=MAX_STEPS, perceptual_weight=0.9, l2_weight=0.1))
+    envs = make_vec_env(DrawingEnv, n_envs=N_ENV, seed=0, 
+                        env_kwargs=dict(max_steps=MAX_STEPS, perceptual_weight=0.9, l2_weight=0.1))
     eval_env = Monitor(DrawingEnv(max_steps=MAX_STEPS))
     print("env num", envs.num_envs)
 
