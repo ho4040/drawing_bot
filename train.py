@@ -58,7 +58,7 @@ class TrainCallback(BaseCallback): # https://stable-baselines3.readthedocs.io/en
     
     def _on_training_end(self):
         # 콜백이 끝날 때 SummaryWriter를 닫습니다.
-        self.writer.close()
+        self.tb_formatter.writer.close()
 
 if __name__ == "__main__":
     # Check tensorboard is working with GET http://localhost:6007/
