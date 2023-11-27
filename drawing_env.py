@@ -174,7 +174,10 @@ class DrawingEnv(gym.Env):
             np_array =  canvas.get_image_as_numpy_array()
             tensor = torch.tensor(np_array).unsqueeze(0).to(self.device)
             tensor_normalized = self.normalize_tensor(tensor.float().div(255))
-            vgg_features = self.vgg(tensor_normalized)
+            if self.perceptual_weight > 0:
+                vgg_features = self.vgg(tensor_normalized)
+            else:
+                vgg_features = None
         return np_array, tensor, tensor_normalized, vgg_features
 
     def apply_target_from_canvas(self):
@@ -193,10 +196,15 @@ class DrawingEnv(gym.Env):
             current_tensor_normalized  = tensor_normalized
             current_features = vgg_features
             # Loss 계산
-            perceptual_loss = torch.nn.functional.mse_loss(current_features, self.target_features).item()            
-            l2_loss = torch.nn.functional.mse_loss(current_tensor_normalized, self.target_tensor_normalized).item()
-            loss = self.perceptual_weight * perceptual_loss  + self.l2_weight * l2_loss
-            return loss
+            if self.perceptual_weight > 0:
+                perceptual_loss = torch.nn.functional.mse_loss(current_features, self.target_features).item()            
+                l2_loss = torch.nn.functional.mse_loss(current_tensor_normalized, self.target_tensor_normalized).item()
+                loss = self.perceptual_weight * perceptual_loss  + self.l2_weight * l2_loss
+                return loss
+            else:
+                l2_loss = torch.nn.functional.mse_loss(current_tensor_normalized, self.target_tensor_normalized).item()
+                return l2_loss
+
     
     def step(self, action):
         if self.curstep >= self.episode_length_limit:
@@ -220,7 +228,7 @@ class DrawingEnv(gym.Env):
         self.set_random_target()
         self.canvas.clear_surface()
         self.curstep = 0
-        self.episode_length_limit = min(self.max_steps, DrawingEnv.DIFFICULTY*2 + random.randint(0, 10))
+        self.episode_length_limit = min(self.max_steps, DrawingEnv.DIFFICULTY + random.randint(0, 2))
         self.last_loss = self.get_current_loss()
 
         return self.get_observation(), {}
