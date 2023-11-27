@@ -131,7 +131,7 @@ class BezierDrawingCanvas:
 
 class DrawingEnv(gym.Env):
     metadata = {'render.modes': ['human', 'rgb_array']}
-    DIFFICULTY = 1
+    DIFFICULTY = 2
     @classmethod
     def inc_difficulty(cls):
         cls.DIFFICULTY = cls.DIFFICULTY+1
@@ -146,7 +146,7 @@ class DrawingEnv(gym.Env):
         self.l2_weight = l2_weight
         self.curstep = 0
         self.max_steps = max_steps
-        self.episode_length_limit = min(max_steps, DrawingEnv.DIFFICULTY*2 + random.randint(0, 10))
+        self.episode_length_limit = min(max_steps, DrawingEnv.DIFFICULTY + random.randint(0, 2))
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.vgg = vgg19(weights=VGG19_Weights.IMAGENET1K_V1).features.eval().to(self.device)
         for param in self.vgg.parameters():
@@ -154,6 +154,7 @@ class DrawingEnv(gym.Env):
         
         self.set_random_target()
         self.last_loss = self.get_current_loss()
+
     def set_random_target(self):
         with torch.no_grad():
             self.target = BezierDrawingCanvas() # vgg size
@@ -206,9 +207,9 @@ class DrawingEnv(gym.Env):
         action = (action + 1) / 2
         self.canvas.draw_action(action)
         new_loss = self.get_current_loss()
-        reward = -new_loss
-        # reward = self.last_loss - new_loss
-        # self.last_loss = new_loss
+        # reward = -new_loss
+        reward = self.last_loss - new_loss
+        self.last_loss = new_loss
         self.curstep += 1
         return self.get_observation(), reward, False, False, {} # observation, reward, terminated, truncated, info 
         
