@@ -29,11 +29,13 @@ def save_action(action, filepath):
     with open(filepath, 'w') as f:
         json.dump(action_dict, f, indent=2)
 
-def generate_sample(env, num_strokes):
+def generate_sample(env, num_previous_strokes, num_after_strokes, gen_true_img=False):
     """단일 샘플 생성
     Args:
         env: DrawingEnv 인스턴스
-        num_strokes: 총 그려야 할 스트로크의 수
+        num_previous_strokes: 예측해야 할 액션 전에 그려야 할 스트로크의 수
+        num_after_strokes: 액션 이후에 추가로 그려야 할 스트로크의 수. 타겟 이미지를 더 어렵게 만들기 위함
+        gen_true_img: true_img 생성 여부
     Returns:
         sample: 현재 이미지, 목표 이미지, 액션을 포함하는 딕셔너리
     """
@@ -43,47 +45,59 @@ def generate_sample(env, num_strokes):
     sample = {}
     
     # 스트로크 그리기
-    for i in range(num_strokes):
-        
+    total_strokes = num_previous_strokes + num_after_strokes + 1
+    for i in range(total_strokes):
         action = env.random_action()
-        # 마지막 스트로크 직전의 상태를 현재 이미지로 저장
-        if i == num_strokes - 1:
-            curr_img = env.canvas.get_image_as_numpy_array()
-            sample["curr_img"] = curr_img.copy()  # 복사본 저장
-            sample["action"] = action
         
-        # 액션 적용
-        env.canvas.draw_action(action)
+        if i == num_previous_strokes:
+            observ = env.get_observation()  # [3, 224, 224*2] ndarray
+            sample["curr_img"] = observ[:, :, 224:].copy()  # CHW format [3, 224, 224]
+            sample["action"] = action.copy()
         
+        env.step(action) # 액션 적용
+        
+        # true_img 생성 (정답 이미지)
+        if gen_true_img and i == num_previous_strokes: 
+            observ = env.get_observation()  # [3, 224, 224*2] ndarray
+            sample["true_img"] = observ[:, :, 224:].copy()  # CHW format [3, 224, 224]
+            
         # 마지막 스트로크 후의 상태를 목표 이미지로 저장
-        if i == num_strokes - 1:
-            goal_img = env.canvas.get_image_as_numpy_array()
-            sample["goal_img"] = goal_img.copy()  # 복사본 저장
+        if i == total_strokes - 1:
+            observ = env.get_observation()  # [3, 224, 224*2] ndarray
+            sample["goal_img"] = observ[:, :, 224:].copy()  # CHW format [3, 224, 224]
     
     return sample
 
-def gen_bc_dataset(num_samples, num_strokes, base_dir):
+def gen_bc_dataset(num_samples, num_previous_strokes, num_after_strokes, base_dir, gen_true_img=False):
     curr_img_dir = os.path.join(base_dir, 'curr_img')
     goal_img_dir = os.path.join(base_dir, 'goal_img')
     action_dir = os.path.join(base_dir, 'action')
+    true_img_dir = os.path.join(base_dir, 'true_img') if gen_true_img else None
+    
     # 기존 디렉토리 제거
     print("Removing existing directories...")
-    for dir_path in [curr_img_dir, goal_img_dir, action_dir]:
+    dirs_to_remove = [curr_img_dir, goal_img_dir, action_dir]
+    if gen_true_img:
+        dirs_to_remove.append(true_img_dir)
+    for dir_path in dirs_to_remove:
         remove_dir(dir_path)
     
     # 디렉토리 생성
     print("Creating new directories...")
-    for dir_path in [curr_img_dir, goal_img_dir, action_dir]:
+    dirs_to_create = [curr_img_dir, goal_img_dir, action_dir]
+    if gen_true_img:
+        dirs_to_create.append(true_img_dir)
+    for dir_path in dirs_to_create:
         ensure_dir(dir_path)
     
     # 환경 초기화
     env = DrawingEnv()
     
     # 샘플 생성
-    print(f"Generating {num_samples} samples with {num_strokes} strokes in current canvas...")
+    print(f"Generating {num_samples} samples with prev:{num_previous_strokes}, after:{num_after_strokes} strokes in current canvas...")
     for i in tqdm(range(num_samples), desc="Generating samples"):
         # 샘플 생성
-        sample = generate_sample(env, num_strokes)
+        sample = generate_sample(env, num_previous_strokes, num_after_strokes, gen_true_img)
         
         # 이미지 저장 (224x224 해상도)
         current_canvas_img = BezierDrawingCanvas()
@@ -94,6 +108,12 @@ def gen_bc_dataset(num_samples, num_strokes, base_dir):
         target_img.fill_image(Image.fromarray(np.transpose(sample["goal_img"], (1, 2, 0))))
         target_img.save_to_file(os.path.join(goal_img_dir, f'{i}.png'))
         
+        # true_img 저장 (gen_true_img가 True인 경우)
+        if gen_true_img:
+            true_img = BezierDrawingCanvas()
+            true_img.fill_image(Image.fromarray(np.transpose(sample["true_img"], (1, 2, 0))))
+            true_img.save_to_file(os.path.join(true_img_dir, f'{i}.png'))
+        
         # 액션 저장
         save_action(sample["action"], os.path.join(action_dir, f'{i}.json'))
     
@@ -102,13 +122,16 @@ def gen_bc_dataset(num_samples, num_strokes, base_dir):
 def main():
     parser = argparse.ArgumentParser(description='Generate imitation learning data using random strokes')
     parser.add_argument('--num_samples', type=int, required=True, help='Number of BC samples to generate')
-    parser.add_argument('--num_strokes', type=int, required=True, help='Number of strokes to draw in current canvas')
+    parser.add_argument('--num_previous_strokes', type=int, required=True, help='Number of strokes to draw in current canvas')
+    parser.add_argument('--num_after_strokes', type=int, required=True, help='Number of strokes to draw in target canvas')
+    parser.add_argument('--gen_true_img', action='store_true', help='Generate true_img (curr_img + 1 action)')
+    
     args = parser.parse_args()
     
     # 저장 디렉토리 설정
     base_dir = './temp/bc'
     
-    gen_bc_dataset(args.num_samples, args.num_strokes, base_dir)
+    gen_bc_dataset(args.num_samples, args.num_previous_strokes, args.num_after_strokes, base_dir, args.gen_true_img)
     
 
 if __name__ == "__main__":

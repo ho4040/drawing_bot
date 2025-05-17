@@ -94,11 +94,21 @@ class BezierDrawingCanvas:
         self.ctx.set_source_rgba(random.random(), random.random(), random.random(), 1)  # White color
         self.ctx.paint()
     
-    def draw_action(self, action):
+    def draw_action(self, action):        
+        
+        # convert range [-1, 1] to [0, 1]        
+        action = (action + 1) / 2
+        
         # 여기에서는 제공된 UV 좌표를 실제 픽셀 좌표로 스케일링합니다.
         # action value range is [0, 1]
+        
         uv_coords = action[:8].reshape((4, 2))
-        control_points = uv_coords * np.array([self.width, self.height])
+        control_points = np.zeros((4, 2))
+        for i in range(4):
+            control_points[i] = [
+                uv_coords[i, 0] * self.width,  # x 좌표
+                uv_coords[i, 1] * self.height  # y 좌표
+            ]
         
         start_width, end_width = action[8:10] 
         start_width = max(start_width, 2/BezierDrawingCanvas.MAX_BRUSH_WIDTH) * BezierDrawingCanvas.MAX_BRUSH_WIDTH  # 픽셀로 너비를 변환합니다. 
@@ -148,12 +158,19 @@ class DrawingEnv(gym.Env):
         self.max_steps = max_steps
         self.episode_length_limit = min(max_steps, DrawingEnv.DIFFICULTY + random.randint(0, 2))
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.vgg = vgg19(weights=VGG19_Weights.IMAGENET1K_V1).features.eval().to(self.device)
-        for param in self.vgg.parameters():
-            param.requires_grad = False
+        self._vgg = None  # VGG 모델을 지연 로딩하기 위해 None으로 초기화
         
         self.set_random_target()
         self.last_loss = self.get_current_loss()
+
+    @property
+    def vgg(self):
+        """VGG19 모델을 지연 로딩하는 프로퍼티"""
+        if self._vgg is None and self.perceptual_weight > 0:
+            self._vgg = vgg19(weights=VGG19_Weights.IMAGENET1K_V1).features.eval().to(self.device)
+            for param in self._vgg.parameters():
+                param.requires_grad = False
+        return self._vgg
 
     def random_action(self):
         """Generate a random stroke action."""
@@ -182,6 +199,9 @@ class DrawingEnv(gym.Env):
         # 곡선의 점 개수
         action[14] = random.uniform(0, 1)
         
+        # [0, 1] 범위를 [-1, 1] 범위로 변환
+        action = action * 2 - 1
+        
         return action
 
     def apply_stroke(self, action):
@@ -204,7 +224,7 @@ class DrawingEnv(gym.Env):
 
     def get_feature(self, canvas:BezierDrawingCanvas):
         with torch.no_grad():
-            np_array =  canvas.get_image_as_numpy_array()
+            np_array = canvas.get_image_as_numpy_array()
             tensor = torch.tensor(np_array).unsqueeze(0).to(self.device)
             tensor_normalized = self.normalize_tensor(tensor.float().div(255))
             if self.perceptual_weight > 0:
@@ -220,8 +240,9 @@ class DrawingEnv(gym.Env):
     def get_observation(self):
         observation_canvas = self.canvas.get_image_as_numpy_array()  # Already CHW format
         observation_reference = self.target_tensor.squeeze(0).cpu().numpy()  # PyTorch Tensor to NumPy array, CHW format
-        observation = np.concatenate([observation_reference, observation_canvas], axis=2)  # Concatenate along the channel dimension
+        observation = np.concatenate([observation_reference, observation_canvas], axis=2)  
         return observation
+    
     
     def get_current_loss(self):
         with torch.no_grad():
@@ -244,8 +265,6 @@ class DrawingEnv(gym.Env):
             return self.get_observation(), 0, True, False, {}
         
         # action = action + np.random.normal(0, 0.05, size=action.shape) # add noise to action
-        # convert range [-1, 1] to [0, 1]        
-        action = (action + 1) / 2
         self.canvas.draw_action(action)
         new_loss = self.get_current_loss()
         # reward = -new_loss

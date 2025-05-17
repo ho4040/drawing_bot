@@ -1,0 +1,19 @@
+# Use our base image with pre-downloaded VGG19 weights
+FROM drawing_bot_base:latest
+
+# Set environment variables
+ENV WANDB_MODE=online
+ENV WANDB_DIR=/workspace/wandb
+
+# Copy source code
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p ./temp/bc/ckpt ./wandb
+
+# Create startup script
+RUN printf '#!/bin/bash\nexec "$@"' > /workspace/start.sh && \
+    chmod +x /workspace/start.sh
+
+# Set the default command
+CMD ["/workspace/start.sh", "python3", "bc.py"] 

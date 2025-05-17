@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+import math
+load_dotenv(override=True)
+     
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -5,89 +9,17 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from PIL import Image
 import os
-from tqdm import tqdm
+from tqdm import tqdm, trange
 import json
-import math
 import argparse
 from gen_bc_dataset import gen_bc_dataset
 from drawing_env import DrawingEnv
 from torchvision import transforms
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=5000):
-        super().__init__()
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        return x + self.pe[:, :x.size(1)]
-
-class VisionTransformer(nn.Module):
-    def __init__(self, img_size=224, patch_size=16, in_channels=6, d_model=256, nhead=8, 
-                 num_layers=6, dim_feedforward=1024, dropout=0.1):
-        super().__init__()
-        
-        # Patch Embedding
-        self.patch_embed = nn.Conv2d(in_channels, d_model, kernel_size=patch_size, stride=patch_size)
-        num_patches = (img_size // patch_size) ** 2
-        
-        # Positional Encoding
-        self.pos_encoder = PositionalEncoding(d_model)
-        
-        # Transformer Encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            batch_first=True
-        )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        
-        # Classification head
-        self.classifier = nn.Sequential(
-            nn.Linear(d_model, 512),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(256, 15)  # 15차원 액션 벡터
-        )
-        
-        # CLS 토큰
-        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
-        
-    def forward(self, x):
-        # x: [B, C, H, W]
-        B = x.shape[0]
-        
-        # Patch Embedding
-        x = self.patch_embed(x)  # [B, d_model, H', W']
-        x = x.flatten(2).transpose(1, 2)  # [B, num_patches, d_model]
-        
-        # CLS 토큰 추가
-        cls_token = self.cls_token.expand(B, -1, -1)
-        x = torch.cat([cls_token, x], dim=1)
-        
-        # Positional Encoding
-        x = self.pos_encoder(x)
-        
-        # Transformer Encoder
-        x = self.transformer_encoder(x)
-        
-        # CLS 토큰만 사용하여 액션 예측
-        x = x[:, 0]
-        
-        # Classification head
-        x = self.classifier(x)
-        
-        return x
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
+from models import DrawingPolicy
+import wandb
+from drawing_env import BezierDrawingCanvas
 
 class DrawingDataset(Dataset):
     def __init__(self, data_dir):
@@ -102,8 +34,12 @@ class DrawingDataset(Dataset):
         # 이미지 변환 파이프라인 설정
         self.transform = transforms.Compose([
             transforms.ToTensor(),  # PIL Image -> Tensor (0-1 범위로 정규화)
-            transforms.Lambda(lambda x: x[:3])  # RGBA -> RGB (알파 채널 제거)
+            transforms.Lambda(self.remove_alpha_channel)  # RGBA -> RGB (알파 채널 제거)
         ])
+    
+    @staticmethod
+    def remove_alpha_channel(x):
+        return x[:3]
     
     def __len__(self):
         return len(self.files)
@@ -136,191 +72,405 @@ class DrawingDataset(Dataset):
         
         return curr_img, goal_img, torch.FloatTensor(action)
 
-class DrawingPolicy(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.vit = VisionTransformer(
-            img_size=224,
-            patch_size=16,
-            in_channels=6,  # curr_img(3) + goal_img(3)
-            d_model=256,
-            nhead=8,
-            num_layers=6,
-            dim_feedforward=1024,
-            dropout=0.1
-        )
+def create_combined_image(current_imgs, goal_imgs, pred_imgs, resize_factor=0.5):
+    """
+    여러 이미지를 결합하여 하나의 이미지로 만드는 함수
+    Args:
+        current_imgs: 현재 이미지 리스트
+        goal_imgs: 목표 이미지 리스트
+        pred_imgs: 예측 이미지 리스트
+        resize_factor: 이미지 크기 조정 비율 (0.5 = 50% 크기)
+    Returns:
+        PIL.Image: 모든 이미지가 결합된 하나의 이미지
+    """
+    sample_images = []
+    for i in range(len(current_imgs)):
+        # 현재 샘플의 세 이미지를 가로로 연결
+        combined_img = np.concatenate([
+            current_imgs[i],  # current
+            goal_imgs[i],     # goal
+            pred_imgs[i]      # predicted
+        ], axis=1)
+        
+        # 이미지 크기 조정
+        if resize_factor != 1.0:
+            h, w = combined_img.shape[:2]
+            new_h, new_w = int(h * resize_factor), int(w * resize_factor)
+            combined_img = np.array(Image.fromarray(combined_img).resize((new_w, new_h), Image.Resampling.LANCZOS))
+        
+        # 이미지에 제목 추가
+        img_with_title = Image.new('RGB', (combined_img.shape[1], combined_img.shape[0] + 30), (255, 255, 255))
+        img_with_title.paste(Image.fromarray(combined_img), (0, 30))
+        
+        # 제목 텍스트 추가
+        from PIL import ImageDraw, ImageFont
+        draw = ImageDraw.Draw(img_with_title)
+        try:
+            font = ImageFont.truetype("arial.ttf", int(20 * resize_factor))
+        except:
+            font = ImageFont.load_default()
+        
+        # 각 이미지 위에 제목 추가
+        draw.text((10, 5), "Current", fill=(0, 0, 0), font=font)
+        draw.text((current_imgs[i].shape[1] * resize_factor + 10, 5), "Goal", fill=(0, 0, 0), font=font)
+        draw.text((current_imgs[i].shape[1] * 2 * resize_factor + 10, 5), "Predicted", fill=(0, 0, 0), font=font)
+        
+        sample_images.append(img_with_title)
     
-    def forward(self, curr_img, goal_img):
-        # 현재 캔버스와 목표 이미지를 채널 방향으로 연결
-        x = torch.cat([curr_img, goal_img], dim=1)
-        return self.vit(x)
+    # 모든 샘플 이미지를 세로로 연결
+    total_height = sum(img.height for img in sample_images)
+    max_width = max(img.width for img in sample_images)
+    
+    combined_all = Image.new('RGB', (max_width, total_height), (255, 255, 255))
+    y_offset = 0
+    for img in sample_images:
+        combined_all.paste(img, (0, y_offset))
+        y_offset += img.height
+    
+    return combined_all
 
-def visualize_predictions(model, dataloader, device, loop_idx, save_dir):
-    """현재 이미지, 목표 이미지, 예측 스트로크 적용 이미지를 시각화하여 저장"""
+def visualize_predictions(model, env, device, num_samples=4, num_initial_strokes=3, num_after_strokes=0, test=False, output_dir=None):
+    """
+    모델의 예측을 시각화하는 함수
+    Args:
+        model: 학습된 DrawingPolicy 모델
+        env: DrawingEnv 인스턴스
+        device: 계산에 사용할 디바이스
+        num_samples: 생성할 샘플 수
+        num_initial_strokes: 초기 캔버스에 그릴 스트로크 수
+        num_after_strokes: 초기 캔버스에 그린 후 추가로 그릴 스트로크 수
+        test: 테스트 모드 여부
+        output_dir: 테스트 모드일 때 이미지를 저장할 디렉토리
+    """
     model.eval()
     with torch.no_grad():
-        # 5개의 샘플 가져오기
-        samples = []
-        for i, (curr_imgs, goal_imgs, actions) in enumerate(dataloader):
-            if i >= 5:  # 5개 샘플만 사용
-                break
-            samples.append((curr_imgs, goal_imgs, actions))
+        current_imgs = []
+        goal_imgs = []
+        pred_imgs = []
         
-        # 각 샘플에 대해 시각화
-        all_images = []
-        for curr_imgs, goal_imgs, actions in samples:
-            curr_imgs = curr_imgs.to(device)
-            goal_imgs = goal_imgs.to(device)
-            
-            # 예측된 액션
-            pred_actions = model(curr_imgs, goal_imgs)
-            
-            # 이미지 변환 (텐서 -> numpy -> PIL)
-            curr_img = curr_imgs[0].cpu().numpy().transpose(1, 2, 0)  # CHW -> HWC
-            goal_img = goal_imgs[0].cpu().numpy().transpose(1, 2, 0)  # CHW -> HWC
-            
-            # 예측된 스트로크 적용
-            env = DrawingEnv()
+        for i in range(num_samples):
+            # 초기 상태 설정
+            env.reset()
             env.canvas.clear_surface()
-            env.canvas.fill_image(Image.fromarray((curr_img * 255).astype(np.uint8)))
-            pred_action = pred_actions[0].cpu().numpy()
-            env.canvas.draw_action(pred_action)
-            pred_img = env.canvas.get_image_as_numpy_array().transpose(1, 2, 0)  # CHW -> HWC
             
-            # 이미지 정규화 (0-1 -> 0-255)
-            curr_img = (curr_img * 255).astype(np.uint8)
-            goal_img = (goal_img * 255).astype(np.uint8)
-            pred_img = (pred_img * 255).astype(np.uint8)
+            # 초기 스트로크 그리기
+            for _ in range(num_initial_strokes):
+                action = env.random_action()
+                env.canvas.draw_action(action)
             
-            # 이미지들을 가로로 연결
-            combined_img = np.concatenate([curr_img, goal_img, pred_img], axis=1)
-            all_images.append(combined_img)
-        
-        # 모든 샘플의 이미지를 세로로 연결
-        final_image = np.concatenate(all_images, axis=0)
-        
-        # 이미지 저장
-        save_path = os.path.join(save_dir, f'generation_loop_{loop_idx+1}.png')
-        Image.fromarray(final_image).save(save_path)
+            # 현재 캔버스 상태 저장 (복사본 생성)
+            current_canvas = env.canvas.get_image_as_numpy_array().copy()  # [3, 224, 224]
+            
+            # 목표 이미지 생성 (현재 캔버스 + 추가 스트로크)
+            target_canvas = BezierDrawingCanvas()
+            target_canvas.fill_image(Image.fromarray(np.transpose(current_canvas, (1, 2, 0))))
+            
+            additional_action = env.random_action()
+            target_canvas.draw_action(additional_action)
+            
+            for _ in range(num_after_strokes):
+                additional_action = env.random_action()
+                target_canvas.draw_action(additional_action)
+            
 
-def train_bc(data_dir, num_epochs=100, batch_size=32, learning_rate=1e-4, model=None):
-    """
-    Train the behavioral cloning model.
+            goal_canvas = target_canvas.get_image_as_numpy_array().copy()  # [3, 224, 224]
+            
+            # 모델 입력을 위한 텐서 변환
+            current_img = torch.FloatTensor(current_canvas).unsqueeze(0).to(device) / 255.0  # [1, 3, 224, 224]
+            goal_img = torch.FloatTensor(goal_canvas).unsqueeze(0).to(device) / 255.0        # [1, 3, 224, 224]
+            
+            # 모델 예측
+            pred_action = model(current_img, goal_img)
+            pred_action = pred_action.cpu().numpy()[0]
+            
+            
+            # 예측된 액션 적용
+            pred_canvas = BezierDrawingCanvas()
+            pred_canvas.fill_image(Image.fromarray(np.transpose(current_canvas, (1, 2, 0))))
+            pred_canvas.draw_action(pred_action)
+            pred_canvas_img = pred_canvas.get_image_as_numpy_array().copy()  # [3, 224, 224]
+            
+            # 이미지 저장 (HWC 형식)
+            current_imgs.append(current_canvas.transpose(1, 2, 0))  # [224, 224, 3]
+            goal_imgs.append(goal_canvas.transpose(1, 2, 0))        # [224, 224, 3]
+            pred_imgs.append(pred_canvas_img.transpose(1, 2, 0))    # [224, 224, 3]
+        
+        # 테스트 모드일 때 이미지 저장
+        if test and output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            combined_img = create_combined_image(current_imgs, goal_imgs, pred_imgs)
+            combined_img.save(os.path.join(output_dir, 'all_samples_combined.png'))
     
-    Args:
-        data_dir (str): Directory containing the dataset
-        num_epochs (int): Number of training epochs
-        batch_size (int): Batch size for training
-        learning_rate (float): Learning rate for optimizer
-        model (DrawingPolicy, optional): Pre-trained model to continue training
-    """
-    # ./temp/bc/ckpt 디렉토리 없으면 생성
-    ckpt_dir = os.path.join(data_dir, 'ckpt')
-    if not os.path.exists(ckpt_dir):
-        os.makedirs(ckpt_dir)
-    
-    # 시각화 결과 저장 디렉토리 생성
-    log_dir = os.path.join(data_dir, 'log')
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    
-    # 데이터셋 및 데이터로더 설정
-    dataset = DrawingDataset(data_dir)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    
-    # 모델 및 옵티마이저 설정
+    return current_imgs, goal_imgs, pred_imgs
+
+def setup_wandb(project_name, entity_name, run_name):
+    """Initialize Weights & Biases logging"""
+    wandb.init(
+        project=project_name,
+        entity=entity_name,
+        name=run_name,
+        config={
+            'project_name': project_name,
+            'entity_name': entity_name,
+            'run_name': run_name
+        }
+    )
+
+def setup_training_environment(output_dir, learning_rate):
+    """Setup training environment including device, directories, and model"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"\nUsing device: {device}")
-    if device.type == 'cuda':
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
+    print(f'Using device: {device}')
     
-    if model is None:
-        model = DrawingPolicy().to(device)
-    else:
-        model = model.to(device)
+    # Create output directories
+    checkpoint_dir = os.path.join(output_dir, 'ckpt')
+    os.makedirs(checkpoint_dir, exist_ok=True)
     
-    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
-    criterion = nn.MSELoss()
+    # Initialize environment and model
+    env = DrawingEnv()
+    model = DrawingPolicy().to(device)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
-    # 학습률 스케줄러
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
+    return device, env, model, optimizer, checkpoint_dir
+
+def create_data_loader(data_dir, batch_size):
+    """Create data loader for training"""
+    dataset = DrawingDataset(data_dir)
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0  # Windows에서 멀티프로세싱 문제 해결을 위해 0으로 설정
+    )
+
+def log_batch_metrics(wandb, loss, optimizer, global_epoch, difficulty_increase_epochs):
+    """Log batch-level metrics to W&B"""
+    wandb.log({
+        'batch/loss': loss.item(),
+        'batch/learning_rate': optimizer.param_groups[0]['lr'],
+        'batch/global_epoch': global_epoch,
+        'batch/stroke_count': get_previous_stroke_count(global_epoch, difficulty_increase_epochs)
+    })
+
+def log_epoch_metrics(wandb, avg_loss, optimizer, global_epoch, difficulty_increase_epochs):
+    """Log epoch-level metrics to W&B"""
+    wandb.log({
+        'epoch/loss': avg_loss,
+        'epoch/learning_rate': optimizer.param_groups[0]['lr'],
+        'epoch/global_epoch': global_epoch,
+        'epoch/prev_stroke_count': get_previous_stroke_count(global_epoch, difficulty_increase_epochs),
+        'epoch/after_stroke_count': get_after_stroke_count(global_epoch, difficulty_increase_epochs)
+    })
+
+def print_training_progress(global_epoch, total_epochs, current_progress, batch_idx, 
+                          train_loader, loss, difficulty_increase_epochs, phase_idx, num_phases):
+    """Print training progress information"""
+    if global_epoch % 5 == 0 and batch_idx == 0:
+        current_epoch = (global_epoch % total_epochs) + 1
+        print(f'Phase {phase_idx + 1}/{num_phases} | '
+              f'Epoch {current_epoch}/{total_epochs} | '
+              f'Global Epoch {global_epoch} | '
+              f'Batch {batch_idx}/{len(train_loader)} | '
+              f'Loss: {loss.item():.4f} | '
+              f'Stroke_count: prev:{get_previous_stroke_count(global_epoch, difficulty_increase_epochs)} after:{get_after_stroke_count(global_epoch, difficulty_increase_epochs)}')
+
+def save_checkpoint(model, checkpoint_dir, global_epoch):
+    """Save model checkpoint"""
+    checkpoint_path = os.path.join(checkpoint_dir, f'bc_weights_epoch_{global_epoch + 1}.pth')
+    torch.save(model.state_dict(), checkpoint_path)
+    print(f'Saved checkpoint to {checkpoint_path}')
+
+def train_epoch(model, train_loader, optimizer, device, global_epoch, total_epochs, 
+                difficulty_increase_epochs, wandb, phase_idx, num_phases):
+    """Train for one epoch"""
+    model.train()
+    total_loss = 0
+    current_epoch = (global_epoch % total_epochs) + 1
+    current_progress = (current_epoch / total_epochs) * 100
     
-    # 학습 루프
+    for batch_idx, (current_imgs, goal_imgs, actions) in enumerate(train_loader):
+        current_imgs = current_imgs.to(device)
+        goal_imgs = goal_imgs.to(device)
+        actions = actions.to(device)
+        
+        optimizer.zero_grad()
+        pred_actions = model(current_imgs, goal_imgs)
+        loss = nn.MSELoss()(pred_actions, actions)
+        loss.backward()
+        optimizer.step()
+        
+        total_loss += loss.item()
+        
+        log_batch_metrics(wandb, loss, optimizer, global_epoch, difficulty_increase_epochs)
+        print_training_progress(global_epoch, total_epochs, current_progress, batch_idx, 
+                              train_loader, loss, difficulty_increase_epochs, phase_idx, num_phases)
+    
+    return total_loss / len(train_loader)
+
+def train_bc(output_dir, num_epochs, learning_rate, batch_size, visualize_freq, 
+            difficulty_increase_epochs, checkpoint_freq=100, start_epoch=0, phase_idx=0, num_phases=1):
+    """Main training function for behavioral cloning"""
+    device, env, model, optimizer, checkpoint_dir = setup_training_environment(output_dir, learning_rate)
+    
+    # Training loop
+    global_epoch = start_epoch
+    total_epochs = num_epochs
+    
+    
+    train_loader = create_data_loader(output_dir, batch_size)
+    
     for epoch in range(num_epochs):
-        model.train()
-        total_loss = 0
-        progress_bar = tqdm(dataloader, desc=f'Epoch {epoch+1}/{num_epochs}')
+        avg_loss = train_epoch(model, train_loader, optimizer, device, global_epoch, 
+                             total_epochs, difficulty_increase_epochs, wandb, phase_idx, num_phases)
         
-        for curr_imgs, goal_imgs, actions in progress_bar:
-            curr_imgs = curr_imgs.to(device)
-            goal_imgs = goal_imgs.to(device)
-            actions = actions.to(device)
-            
-            # 액션 예측
-            pred_actions = model(curr_imgs, goal_imgs)
-            
-            # 손실 계산
-            loss = criterion(pred_actions, actions)
-            
-            # 역전파 및 최적화
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            total_loss += loss.item()
-            progress_bar.set_postfix({'loss': f"{total_loss / (progress_bar.n + 1):.4f}"})
+        log_epoch_metrics(wandb, avg_loss, optimizer, global_epoch, difficulty_increase_epochs)
         
-        # 학습률 조정
-        scheduler.step()
+        # Visualize predictions based on frequency
+        if (global_epoch + 1) % visualize_freq == 0:
+            current_imgs, goal_imgs, pred_imgs = visualize_predictions(
+                model, env, device, 
+                num_samples=3,
+                num_initial_strokes=get_previous_stroke_count(global_epoch, difficulty_increase_epochs),
+                num_after_strokes=get_after_stroke_count(global_epoch, difficulty_increase_epochs)
+            )
+            
+            combined_img = create_combined_image(current_imgs, goal_imgs, pred_imgs, resize_factor=0.5)
+            wandb.log({
+                'predictions': wandb.Image(
+                    np.array(combined_img),
+                    caption=f'Phase {phase_idx + 1}/{num_phases} | Global {global_epoch + 1}'
+                )
+            })
+            print("Visualization saved to W&B")
         
-        # 100 에폭마다 모델 저장
-        if (epoch + 1) % 100 == 0:
-            torch.save(model.state_dict(), f'./temp/bc/ckpt/bc_weights_epoch_{epoch+1}.pth')
+        # Save checkpoint based on frequency
+        if (global_epoch + 1) % checkpoint_freq == 0:
+            save_checkpoint(model, checkpoint_dir, global_epoch)
+        
+        global_epoch += 1
+    
+    # Save final model
+    final_model_path = os.path.join(checkpoint_dir, 'bc_weights_final.pth')
+    torch.save(model.state_dict(), final_model_path)
+    print(f'Saved final model to {final_model_path}')
     
     return model
+
+def run_visualization_test(output_dir):
+    """Run visualization test mode"""
+    print("Running visualization test...")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    env = DrawingEnv()
+    model = DrawingPolicy().to(device)
+    
+    model_path = os.path.join(output_dir, 'ckpt', 'bc_weights_final.pth')
+    if os.path.exists(model_path):
+        print(f"Loading model from {model_path}")
+        model.load_state_dict(torch.load(model_path))
+    else:
+        print("No trained model found. Using untrained model for visualization.")
+    
+    output_dir = os.path.join(output_dir, 'log', 'visualization_test')
+    current_imgs, goal_imgs, pred_imgs = visualize_predictions(
+        model, env, device,
+        num_samples=3,
+        num_initial_strokes=3,
+        num_after_strokes=0,
+        test=True,
+        output_dir=output_dir
+    )
+    print(f"Visualization test completed. Images saved to {output_dir}")
+
+def get_previous_stroke_count(global_epoch, difficulty_increase_epochs):
+    return (global_epoch // difficulty_increase_epochs)
+
+def get_after_stroke_count(global_epoch, difficulty_increase_epochs):
+    return math.floor(min((0.5 * global_epoch) // difficulty_increase_epochs, 3))
+
+def run_curriculum_phase(output_dir, phase_idx, num_phases, global_epoch, 
+                        num_samples, num_epochs, learning_rate, batch_size, visualize_freq,
+                        difficulty_increase_epochs, checkpoint_freq, model):
+    
+    """Run a single curriculum phase"""
+    
+    print(f"\nCurriculum Phase {phase_idx+1}/{num_phases}")
+    prev_stroke_count = get_previous_stroke_count(global_epoch, difficulty_increase_epochs)
+    after_stroke_count = get_after_stroke_count(global_epoch, difficulty_increase_epochs)
+    print(f"Generating dataset...prev_stroke_count: {prev_stroke_count} after_stroke_count:{after_stroke_count} Number of samples: {num_samples}")
+    gen_bc_dataset(num_samples, prev_stroke_count, after_stroke_count, output_dir)
+    
+    print("Starting training...")
+    model = train_bc(
+        output_dir=output_dir,
+        num_epochs=num_epochs,
+        learning_rate=learning_rate,
+        batch_size=batch_size,
+        visualize_freq=visualize_freq,
+        difficulty_increase_epochs=difficulty_increase_epochs,
+        checkpoint_freq=checkpoint_freq,
+        start_epoch=global_epoch,
+        phase_idx=phase_idx,
+        num_phases=num_phases
+    )
+    
+    global_epoch += num_epochs
+    
+    
+    
+    return model, global_epoch
 
 def main():
     parser = argparse.ArgumentParser(description='Train behavioral cloning model')
     parser.add_argument('--num_samples', type=int, default=300, help='Number of samples to generate')
-    parser.add_argument('--batch_size', type=int, default=300, help='Batch size for training')
+    parser.add_argument('--batch_size', type=int, default=100, help='Batch size for training')
     parser.add_argument('--output_dir', type=str, default='./temp/bc', help='Output directory path')
-    parser.add_argument('--num_epochs', type=int, default=200, help='Number of training epochs')
+    parser.add_argument('--num_epochs', type=int, default=50, help='Number of training epochs')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate')
-    parser.add_argument('--generation_loop_count', type=int, default=10, help='Loop count for generating dataset')
-    parser.add_argument('--strokes_increase_schedule', type=int, default=2, help='Each k generation loop, increase the number of strokes')
+    parser.add_argument('--curriculum_phases', type=int, default=10, help='Number of curriculum phases')
+    parser.add_argument('--difficulty_increase_epochs', type=int, default=100, help='Increase number of strokes every k global epochs')
+    parser.add_argument('--visualize_freq', type=int, default=50, help='Visualize predictions every k epochs')
+    parser.add_argument('--checkpoint_freq', type=int, default=100, help='Save checkpoint every k epochs')
+    parser.add_argument('--test', type=str, choices=['visualize'], help='Run test mode')
     args = parser.parse_args()
     
-    model = None
-    stroke_count = 0
-    for i in range(args.generation_loop_count):
-        if i % args.strokes_increase_schedule == 0:            
-            stroke_count += 1            
-            
-        print(f"\nGeneration loop {i+1}/{args.generation_loop_count}")
-        # 데이터셋 재 생성
-        print(f"Generating dataset...Stroke count: {stroke_count} Number of samples: {args.num_samples}")
-        data_dir = args.output_dir
-        gen_bc_dataset(args.num_samples, stroke_count, data_dir)
-        
-        # 학습 수행
-        print("Starting training...")
-        model = train_bc(
-            data_dir=data_dir,
-            num_epochs=args.num_epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            model=model
-        )
-        
-        # 학습 완료 후 시각화
-        print("Generating visualization...")
-        dataset = DrawingDataset(data_dir)
-        dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
-        visualize_predictions(model, dataloader, torch.device('cuda' if torch.cuda.is_available() else 'cpu'), i, os.path.join(data_dir, 'log'))
+    if args.test == 'visualize':
+        run_visualization_test(args.output_dir)
+        return
     
-    # 최종 모델 저장
-    torch.save(model.state_dict(), 'bc_weights_final.pth')
-    print(f"Training completed. Final model saved as 'bc_weights_final.pth'")
+    # Initialize W&B once for the entire curriculum training
+    project_name = os.getenv('WANDB_PROJECT', 'drawing_bot')
+    entity_name = os.getenv('WANDB_ENTITY')
+    run_name = os.getenv('WANDB_RUN_NAME', f'bc_train_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
+    setup_wandb(project_name, entity_name, run_name)
+    
+    # 일반 학습 모드
+    model = None
+    global_epoch = 0
+    
+    try:
+        for phase_idx in range(args.curriculum_phases):
+            model, global_epoch = run_curriculum_phase(
+                output_dir=args.output_dir,
+                phase_idx=phase_idx,
+                num_phases=args.curriculum_phases,
+                global_epoch=global_epoch,
+                num_samples=args.num_samples,
+                num_epochs=args.num_epochs,
+                learning_rate=args.learning_rate,
+                batch_size=args.batch_size,
+                visualize_freq=args.visualize_freq,
+                difficulty_increase_epochs=args.difficulty_increase_epochs,
+                checkpoint_freq=args.checkpoint_freq,
+                model=model
+            )
+        
+        # 최종 모델 저장
+        torch.save(model.state_dict(), os.path.join(args.output_dir, 'ckpt', 'bc_weights_final.pth'))
+        print(f"Training completed. Final model saved as '{os.path.join(args.output_dir, 'ckpt', 'bc_weights_final.pth')}'")
+        print(f"To view the logs, run: wandb open {os.path.join(args.output_dir, 'log')}")
+    
+    finally:
+        # Ensure W&B is properly closed
+        wandb.finish()
 
 if __name__ == "__main__":
     main() 

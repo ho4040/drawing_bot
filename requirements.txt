@@ -1,8 +1,13 @@
 gymnasium
-torchvision
-torch
+torchvision>=0.15.0
+torch>=2.0.0
 stable-baselines3[extra]
 pycairo
 python-dotenv
-tensorboard
+tensorboard>=2.13.0
 requests
+numpy>=1.21.0
+Pillow>=9.0.0
+tqdm>=4.65.0
+matplotlib>=3.4.0
+wandb>=0.15.0

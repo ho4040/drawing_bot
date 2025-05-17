@@ -3,6 +3,12 @@ __pycache__
 runs
 tests
 .gitignore
-docker_push.sh
-docker_build.sh
-docker_run.sh
+docker_build_base.sh
+docker_push_bc.sh
+docker_build_bc.sh
+docker_run_bc.sh
+docker_push_rl.sh
+docker_build_rl.sh
+docker_run_rl.sh
+Dockerfile.*
+.env
