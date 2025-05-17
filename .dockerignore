@@ -12,3 +12,6 @@ docker_build_rl.sh
 docker_run_rl.sh
 Dockerfile.*
 .env
+wandb
+temp
+.vscode
