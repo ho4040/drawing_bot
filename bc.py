@@ -348,10 +348,6 @@ def train_bc(output_dir, num_epochs, learning_rate, batch_size, visualize_freq,
         
         global_epoch += 1
     
-    # Save final model
-    final_model_path = os.path.join(checkpoint_dir, 'bc_weights_final.pth')
-    torch.save(model.state_dict(), final_model_path)
-    print(f'Saved final model to {final_model_path}')
     
     return model
 
@@ -423,11 +419,11 @@ def main():
     parser.add_argument('--num_samples', type=int, default=300, help='Number of samples to generate')
     parser.add_argument('--batch_size', type=int, default=100, help='Batch size for training')
     parser.add_argument('--output_dir', type=str, default='./temp/bc', help='Output directory path')
-    parser.add_argument('--num_epochs', type=int, default=50, help='Number of training epochs')
+    parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--curriculum_phases', type=int, default=10, help='Number of curriculum phases')
-    parser.add_argument('--difficulty_increase_epochs', type=int, default=100, help='Increase number of strokes every k global epochs')
-    parser.add_argument('--visualize_freq', type=int, default=50, help='Visualize predictions every k epochs')
+    parser.add_argument('--difficulty_increase_epochs', type=int, default=500, help='Increase number of strokes every k global epochs')
+    parser.add_argument('--visualize_freq', type=int, default=10, help='Visualize predictions every k epochs')
     parser.add_argument('--checkpoint_freq', type=int, default=100, help='Save checkpoint every k epochs')
     parser.add_argument('--test', type=str, choices=['visualize'], help='Run test mode')
     args = parser.parse_args()
