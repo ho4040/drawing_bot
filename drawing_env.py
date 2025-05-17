@@ -155,6 +155,39 @@ class DrawingEnv(gym.Env):
         self.set_random_target()
         self.last_loss = self.get_current_loss()
 
+    def random_action(self):
+        """Generate a random stroke action."""
+        # 랜덤 컨트롤 포인트 생성
+        p0 = (random.uniform(0, self.canvas.width), random.uniform(0, self.canvas.height))
+        p1 = (random.uniform(0, self.canvas.width), random.uniform(0, self.canvas.height))
+        p2 = (random.uniform(0, self.canvas.width), random.uniform(0, self.canvas.height))
+        p3 = (random.uniform(0, self.canvas.width), random.uniform(0, self.canvas.height))
+        
+        # 액션 생성
+        action = np.zeros(15)
+        # 컨트롤 포인트 (정규화)
+        action[0:2] = [p0[0] / self.canvas.width, p0[1] / self.canvas.height]
+        action[2:4] = [p1[0] / self.canvas.width, p1[1] / self.canvas.height]
+        action[4:6] = [p2[0] / self.canvas.width, p2[1] / self.canvas.height]
+        action[6:8] = [p3[0] / self.canvas.width, p3[1] / self.canvas.height]
+        
+        # 두께 (정규화)
+        action[8] = random.uniform(0.1, 1.0)  # 시작 두께
+        action[9] = random.uniform(0.1, 1.0)  # 끝 두께
+        
+        # 색상
+        action[10:14] = random_color()  # RGBA
+        action[13] = max(action[13], 0.5)  # 최소 투명도 설정
+        
+        # 곡선의 점 개수
+        action[14] = random.uniform(0, 1)
+        
+        return action
+
+    def apply_stroke(self, action):
+        """Apply a stroke action to the canvas."""
+        self.canvas.draw_action(action)
+
     def set_random_target(self):
         with torch.no_grad():
             self.target = BezierDrawingCanvas() # vgg size
@@ -185,9 +218,9 @@ class DrawingEnv(gym.Env):
         self.last_loss = self.get_current_loss()
 
     def get_observation(self):
-        current_obs = self.canvas.get_image_as_numpy_array()  # Already CHW format
-        target_obs = self.target_tensor.squeeze(0).cpu().numpy()  # PyTorch Tensor to NumPy array, CHW format
-        observation = np.concatenate([target_obs, current_obs], axis=2)  # Concatenate along the channel dimension
+        observation_canvas = self.canvas.get_image_as_numpy_array()  # Already CHW format
+        observation_reference = self.target_tensor.squeeze(0).cpu().numpy()  # PyTorch Tensor to NumPy array, CHW format
+        observation = np.concatenate([observation_reference, observation_canvas], axis=2)  # Concatenate along the channel dimension
         return observation
     
     def get_current_loss(self):
